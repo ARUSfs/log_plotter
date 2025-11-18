@@ -12,6 +12,8 @@ from matplotlib.figure import Figure
 import re
 import sys
 import array
+import math
+from sensor_msgs_py import point_cloud2
 
 
 def read_ros_messages(input_bag: str):
@@ -43,250 +45,241 @@ def to_safe_identifier(name):
     return "_" + re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
-def plot_variables(df):
+def plot_variables(df, last_snapshots={}):
     root = tk.Tk()
-    root.title("Log Plotter")
-
+    root.title("Log Plotter - ROS2 & CAN")
+    root.geometry("1200x800")
+    
     main_frame = tk.Frame(root)
-    main_frame.pack(side="left", fill="y", padx=5, pady=5)
-
-    canvas_frame = tk.Frame(root)
-    canvas_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
-
-    tk.Label(main_frame, text="X Axis:").pack(pady=(5, 0))
-    x_axis_var = StringVar(value="timestamp")
-    x_selector = ttk.Combobox(main_frame, textvariable=x_axis_var, state="readonly")
-    x_selector.pack(fill="x", padx=5)
-
-
-    # Field for expressions
-    tk.Label(main_frame, text="Expression (e.g.: /a.x + /b.y):").pack(pady=(10, 0))
-    expr_entry = tk.Entry(main_frame)
-    expr_entry.pack(fill="x", padx=5)
-    expr_btn = tk.Button(main_frame, text="Add Expression")
-    expr_btn.pack(pady=(2, 5))
-
-    tk.Label(main_frame, text="Variables by topic:").pack(pady=(10, 0))
-
-    scroll_canvas = tk.Canvas(main_frame)
-    scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=scroll_canvas.yview)
-    topics_container = tk.Frame(scroll_canvas)
+    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
     
-
-    topics_container.bind(
-        "<Configure>",
-        lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
-    )
-
-    scroll_canvas.create_window((0, 0), window=topics_container, anchor="nw")
-    scroll_canvas.configure(yscrollcommand=scrollbar.set)
-    scroll_canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def _on_mousewheel(event):
-        scroll_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-
-    # Windows & macOS (delta-based scrolling)
-    scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-    # Linux (button-based scrolling)
-    scroll_canvas.bind_all("<Button-4>", lambda e: scroll_canvas.yview_scroll(-1, "units"))
-    scroll_canvas.bind_all("<Button-5>", lambda e: scroll_canvas.yview_scroll(1, "units"))
-
-
     
-
-    # Group columns by topic
-    topic_fields = {}
-    for col in df.columns:
-        if col == "timestamp":
-            continue
-        if '.' in col:
-            topic, field = col.split('.', 1)
-        else:
-            topic, field = col, ""
-
-        if topic not in topic_fields:
-            topic_fields[topic] = []
-        topic_fields[topic].append((col, field))
-
-    x_options = [col for col in df.columns if col != "timestamp" and pd.api.types.is_numeric_dtype(df[col])]
-    x_selector["values"] = ["timestamp"] + sorted(x_options)
-
-    check_vars = {}
-    expr_counter = [0]
-
-    fig = Figure(figsize=(7, 5), dpi=100)
-    ax = fig.add_subplot(111)
-    canvas = FigureCanvasTkAgg(fig, master=canvas_frame)
-    canvas_widget = canvas.get_tk_widget()
-    canvas_widget.pack(fill="both", expand=True)
-
-    toolbar = NavigationToolbar2Tk(canvas, canvas_frame)
+    controls_canvas = tk.Canvas(main_frame, width=350)
+    scrollbar = tk.Scrollbar(main_frame, orient="vertical", command=controls_canvas.yview)
+    scrollable_frame = tk.Frame(controls_canvas)
+    
+    scrollable_frame.bind("<Configure>", lambda e: controls_canvas.configure(scrollregion=controls_canvas.bbox("all")))
+    controls_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    controls_canvas.configure(yscrollcommand=scrollbar.set)
+    
+    controls_canvas.pack(side="left", fill="y")
+    scrollbar.pack(side="left", fill="y")
+    
+    
+    plot_frame = tk.Frame(main_frame)
+    plot_frame.pack(side="right", fill="both", expand=True)
+    
+    fig, ax = plt.subplots()
+    canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+    canvas.get_tk_widget().pack(fill="both", expand=True)
+    toolbar = NavigationToolbar2Tk(canvas, plot_frame)
     toolbar.update()
-    toolbar.pack(side="top", fill="x")
-
-    def on_selection_change():
-        selected = [col for col, var in check_vars.items() if var.get()]
+    
+    check_vars = {} 
+    
+    
+    def update_plot():
         ax.clear()
-
+        
         x_col = x_axis_var.get()
         if x_col not in df.columns:
-            x_col = "timestamp"
+            x_data = df["timestamp"]
+            x_lbl = "Time (s)"
+        else:
+            x_data = df[x_col]
+            x_lbl = x_col
 
-        if selected:
-            for col in selected:
-                if x_col == "timestamp":
-                    ax.plot(df[x_col], df[col], label=col)
-                else:
-                    ax.scatter(df[x_col], df[col], s=10, label=col)
-
-        ax.set_xlabel(x_col)
-        ax.set_ylabel("Value")
-        ax.grid(True)
-        ax.legend()
+        has_plots = False
+        for col, var in check_vars.items():
+            if var.get():
+                has_plots = True
+                ax.plot(x_data, df[col], label=col)
+        
+        if has_plots:
+            ax.set_xlabel(x_lbl)
+            ax.legend()
+            ax.grid(True)
+            ax.set_aspect('auto') 
+        
         canvas.draw()
 
-    x_selector.bind("<<ComboboxSelected>>", lambda e: on_selection_change())
-
-    def toggle_frame(frame, button):
-        def toggler():
-            if frame.winfo_viewable():
-                frame.pack_forget()
-                button.config(text=button.cget("text").replace("▼", "▶"))
-            else:
-                frame.pack(fill="x", padx=20)
-                button.config(text=button.cget("text").replace("▶", "▼"))
-        return toggler
-
-    for topic, fields in sorted(topic_fields.items()):
-        topic_frame = tk.Frame(topics_container)
-        topic_frame.pack(fill="x", pady=3)
-
-        if len(fields) == 1:
-            full_col, field = fields[0]
-            var = tk.BooleanVar()
-            var.trace_add("write", lambda *_: on_selection_change())
-            if len(field) > 0:
-                label = f"{topic}.{field}"
-            else:
-                label = topic
-            check = tk.Checkbutton(topic_frame, text=label, variable=var)
-            check.pack(anchor="w", padx=10)
-            check_vars[full_col] = var
-
-
-        else:
-            btn = tk.Button(topic_frame, text=f"▶ {topic}", anchor="w", relief="flat")
-            btn.pack(fill="x")
-
-            fields_frame = tk.Frame(topic_frame)
-            btn.config(command=toggle_frame(fields_frame, btn))
-
-            for full_col, field in fields:
-                var = tk.BooleanVar()
-                var.trace_add("write", lambda *_: on_selection_change())
-                check = tk.Checkbutton(fields_frame, text=field, variable=var)
-                check.pack(anchor="w")
-                check_vars[full_col] = var
-
-
-    def add_expression():
-        expr = expr_entry.get().strip()
-        if not expr:
-            return
-
+    
+    def plot_snapshot():
+        topic = snapshot_selector.get()
+        if topic not in last_snapshots: return
+            
+        msg = last_snapshots[topic]
+        ax.clear()
+        plotted = False
+        
         try:
-            safe_cols = {to_safe_identifier(col): df[col] for col in df.columns}
-            safe_expr = expr
-            for col in df.columns:
-                safe_expr = safe_expr.replace(col, to_safe_identifier(col))
+            
+            if "PointCloud2" in str(type(msg)):
+                points = list(point_cloud2.read_points(msg, field_names=("x", "y"), skip_nans=True))
+                if points:
+                    x = [p[0] for p in points]
+                    y = [p[1] for p in points]
+                    ax.scatter(x, y, s=2, c='black', label=f"Map: {topic}")
+                    plotted = True
 
-            result = eval(safe_expr, {"__builtins__": {}}, safe_cols)
-            print(safe_expr)
-            print(result)
+            
+            elif hasattr(msg, 'points') or hasattr(msg, 'poses'):
+                plist = getattr(msg, 'points', getattr(msg, 'poses', []))
+                x, y = [], []
+                if len(plist) > 0:
+                    p0 = plist[0]
+                    
+                    if hasattr(p0, 'x') and hasattr(p0, 'y'):
+                        x = [p.x for p in plist]
+                        y = [p.y for p in plist]
+                    elif hasattr(p0, 'pose'):
+                        if hasattr(p0.pose, 'position'):
+                            x = [p.pose.position.x for p in plist]
+                            y = [p.pose.position.y for p in plist]
+                    elif isinstance(p0, (list, tuple)) and len(p0) >= 2:
+                        x = [p[0] for p in plist]
+                        y = [p[1] for p in plist]
 
-            col_name = f"expr_{expr_counter[0]}"
-            df[col_name] = result
-            expr_counter[0] += 1
+                if x and y:
+                    ax.plot(x, y, '-o', markersize=3, label=f"Traj: {topic}")
+                    ax.plot(x[0], y[0], 'go', label="Start") 
+                    ax.plot(x[-1], y[-1], 'rx', label="End") 
+                    plotted = True
 
-            # Add checkbox
-            var = tk.BooleanVar(value=True)
-            var.trace_add("write", lambda *_: on_selection_change())
-            row_frame = tk.Frame(topics_container)
-            row_frame.pack(fill="x", anchor="w", padx=10, pady=1)
-
-            check = tk.Checkbutton(row_frame, text=f"{col_name} ({expr})", variable=var)
-            check.pack(side="left", anchor="w")
-            check_vars[col_name] = var
-            on_selection_change()
-
-            def delete_column():
-                row_frame.destroy()
-                if col_name in df.columns:
-                    df.drop(columns=[col_name], inplace=True)
-                check_vars.pop(col_name, None)
-                x_vals = list(x_selector["values"])
-                if col_name in x_vals:
-                    x_vals.remove(col_name)
-                    x_selector["values"] = x_vals
-                    if x_axis_var.get() == col_name:
-                        x_axis_var.set("timestamp")
-                on_selection_change()
-
-            del_btn = tk.Button(row_frame, text="Delete", command=delete_column)
-            del_btn.pack(side="right", padx=5)
-
-
-            # Add to X axis combo
-            current_x = list(x_selector["values"])
-            if col_name not in current_x:
-                x_selector["values"] = current_x + [col_name]
+            if plotted:
+                ax.set_title(f"Snapshot: {topic}")
+                ax.set_xlabel("X (m)")
+                ax.set_ylabel("Y (m)")
+                ax.legend()
+                ax.grid(True)
+                ax.set_aspect('equal', 'box') 
+                canvas.draw()
+                
         except Exception as e:
-            print(f"Error in expression: {e}")
+            print(f"Error plot snapshot: {e}")
 
-    expr_btn.config(command=add_expression)
+    
+    if last_snapshots:
+        snap_frame = tk.LabelFrame(scrollable_frame, text="Map & Trajectory Viewer", font=("Bold"), fg="blue")
+        snap_frame.pack(fill="x", padx=5, pady=5)
+        
+        snapshot_selector = ttk.Combobox(snap_frame, values=list(last_snapshots.keys()), state="readonly")
+        snapshot_selector.pack(fill="x", padx=5)
+        if list(last_snapshots.keys()): snapshot_selector.current(0)
+            
+        tk.Button(snap_frame, text="PLOT MAP / CIRCUIT", bg="#ddd", command=plot_snapshot).pack(fill="x", pady=5)
+
+    
+    ts_frame = tk.LabelFrame(scrollable_frame, text="Time Series")
+    ts_frame.pack(fill="x", padx=5, pady=10)
+    
+    x_axis_var = tk.StringVar(value="timestamp")
+    ttk.Combobox(ts_frame, textvariable=x_axis_var, values=["timestamp"] + list(df.columns)).pack(fill="x", padx=5)
+
+   
+    grouped = {}
+    for c in df.columns:
+        if c == "timestamp": continue
+        grp = c.split('.')[0] if '.' in c else "Misc"
+        if grp not in grouped: grouped[grp] = []
+        grouped[grp].append(c)
+
+    for grp, cols in grouped.items():
+        gf = tk.Frame(ts_frame, bd=1, relief="solid")
+        gf.pack(fill="x", pady=1)
+        vf = tk.Frame(gf)
+        
+        def toggle(f=vf, b=None, t=grp):
+            if f.winfo_viewable():
+                f.pack_forget()
+                if b: b.config(text=f"▶ {t}")
+            else:
+                f.pack(fill="x", padx=10)
+                if b: b.config(text=f"▼ {t}")
+
+        btn = tk.Button(gf, text=f"▶ {grp}", anchor="w", relief="flat")
+        btn.config(command=lambda f=vf, b=btn, t=grp: toggle(f, b, t))
+        btn.pack(fill="x")
+        
+        for c in cols:
+            var = tk.BooleanVar()
+            tk.Checkbutton(vf, text=c, variable=var, command=update_plot).pack(anchor="w")
+            check_vars[c] = var
 
     root.mainloop()
+
 
 
 def read_rosbag_mcap(file_path: str):
     rows = []
     seen_columns = set()
+    
+   
+    last_snapshots = {} 
+
+    print(f"Procesando archivo: {file_path}...")
 
     for topic, msg, timestamp, msg_type in read_ros_messages(file_path):
         ts_sec = timestamp * 1e-9
+        msg_type_str = str(type(msg))
+
+ 
+        if "PointCloud2" in msg_type_str:
+            last_snapshots[topic] = msg
+            continue
+
+       
+        is_trajectory = False
+
+        if hasattr(msg, 'points') and isinstance(msg.points, list) and len(msg.points) > 0:
+            is_trajectory = True
+        elif hasattr(msg, 'poses') and isinstance(msg.poses, list) and len(msg.poses) > 0:
+            is_trajectory = True
+            
+        if is_trajectory:
+            last_snapshots[topic] = msg
+            continue 
+
+      
         row = {"timestamp": ts_sec}
+        try:
+            for field in msg.get_fields_and_field_types():
+                if field == "header": continue
+                
+                value = getattr(msg, field)
+                
+                if isinstance(value, (int, float)):
+                    col_name = f"{topic}.{field}"
+                    row[col_name] = value
+                    seen_columns.add(col_name)
+                
+                elif isinstance(value, (list, tuple, np.ndarray)) and len(value) <= 20:
+                    for i, val in enumerate(value):
+                        if isinstance(val, (int, float)):
+                            col_name = f"{topic}.{field}[{i}]"
+                            row[col_name] = val
+                            seen_columns.add(col_name)
+                            
+            if len(row) > 1:
+                rows.append(row)
+                
+        except Exception as e:
+            pass 
 
-        for field in msg.get_fields_and_field_types():
-            if field == "header":
-                continue
-
-            value = getattr(msg, field)        
-            if isinstance(value, (int, float)):
-                column_name = f"{topic}.{field}"
-                row[column_name] = value
-                seen_columns.add(column_name)
-            elif isinstance(value, (array.array)) and len(value)<=20:
-                for i, val in enumerate(value):
-                    column_name = f"{topic}.{field}[{i}]"
-                    row[column_name] = val
-                    seen_columns.add(column_name)
-
-        if len(row) > 1:
-            rows.append(row)
 
     if rows:
         df = pd.DataFrame(rows)
-
         for col in seen_columns:
             if col not in df.columns:
                 df[col] = np.nan
-
         df.sort_values("timestamp", inplace=True)
         df.ffill(inplace=True)
-    
-    return df
+    else:
+        df = pd.DataFrame()
+
+
+    return df, last_snapshots
+
 
 
 def read_can_txt_file(file_path: str):
@@ -359,36 +352,34 @@ def read_can_txt_file(file_path: str):
 
 
 def main():
+    import sys
+
+    
     if len(sys.argv) > 1:
         file_path = sys.argv[1]
     else:
         root = tk.Tk()
-        root.withdraw()  
+        root.withdraw()
+        file_path = filedialog.askopenfilename()
+        root.destroy()
 
-        file_path = filedialog.askopenfilename(
-            title="Select the log file",
-            filetypes=[("MCAP files", "*.mcap"), ("txt files", "*.txt"), ("All files", "*.*")]
-        )
-        root.destroy()  
+    if not file_path: return
 
-        if not file_path:
-            messagebox.showerror("Error", "No file selected.")
-            exit()
-
-    df = pd.DataFrame()
+    last_snapshots = {} 
     
     if file_path.endswith(".txt"):
         df = read_can_txt_file(file_path)
-        # Convertir timestamp a datetime opcionalmente
-        # df["timestamp"] = pd.to_datetime(df["timestamp"], unit='s')
     else:
-        df = read_rosbag_mcap(file_path)  # tu función original para MCAP
+        df, last_snapshots = read_rosbag_mcap(file_path)
+
+    if not df.empty or last_snapshots:
+        plot_variables(df, last_snapshots)
+    else:
+        print("No data found.")
 
 
-    if not df.empty:
-        plot_variables(df)
-    else:
-        print("No numeric data extracted for plotting.")
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
