@@ -147,47 +147,80 @@ def calculate_scalar(df_local, scalar_expr_entry_local, scalar_func_var_local, s
 
 def draw_plot(df_local, fig, canvas, config):
     """
-    Dibuja un único gráfico (1x1) en la figura (fig) usando la configuración (config).
+    Dibuja un gráfico en la figura usando la configuración dada.
+    Versión FINAL corregida para evitar UnboundLocalError.
     """
-    
     fig.clear()
-    ax = fig.add_subplot(1, 1, 1) 
+    ax = fig.add_subplot(1, 1, 1)
 
     
-    x_col = config['x_axis_combobox'].get()
-    if x_col not in df_local.columns:
-        x_data = df_local["timestamp"]; x_lbl_data = "Time (s)"
+    variables_to_plot = [] 
+    
+    x_col_obj = config.get('x_axis_combobox')
+    
+    x_col = x_col_obj.get() if hasattr(x_col_obj, 'get') else str(x_col_obj)
+
+    if x_col == "index" or x_col not in df_local.columns:
+        x_data = df_local.index
+        x_lbl_default = "Index / Time Step"
     else:
-        x_data = df_local[x_col]; x_lbl_data = x_col
-        
-    
-    variables_to_plot = [col_name for col_name, var_status in check_vars.items() 
-                         if var_status.get() and col_name in df_local.columns]
+        x_data = df_local[x_col]
+        x_lbl_default = x_col
 
+    
+    if 'variables_to_plot' in config:
+        variables_to_plot = config['variables_to_plot']
+    
+    
+    elif 'check_vars' in globals() and check_vars:
+        variables_to_plot = [col for col, var in check_vars.items() 
+                             if var.get() and col in df_local.columns]
+
+    
     if variables_to_plot:
-            
-        y_col_mode = config['y_axis_mode_var'].get()
+        y_mode_obj = config.get('y_axis_mode_var')
+        y_col_mode = y_mode_obj.get() if hasattr(y_mode_obj, 'get') else "Multiple Variables"
+
         
-        if y_col_mode == "Scatter (X vs. Single Y)" and len(variables_to_plot) == 1:
-            y_col = variables_to_plot[0]
-            ax.plot(x_data, df_local[y_col], label=y_col, alpha=0.8, linewidth=1.5)
-            y_lbl_default = y_col
+        t_entry = config.get('title_entry')
+        title_text = t_entry.get() if hasattr(t_entry, 'get') else str(t_entry)
+        is_map = "PointCloud" in title_text or "Map" in title_text
+
+        if ("Scatter" in y_col_mode and len(variables_to_plot) == 1) or is_map:
+            for col in variables_to_plot:
+                
+                pt_size = 2 if is_map else 10 
+                ax.scatter(x_data, df_local[col], s=pt_size, label=col, alpha=0.6)
+            y_lbl_default = "Y Coordinate" if is_map else variables_to_plot[0]
         else:
             for col in variables_to_plot:
                 ax.plot(x_data, df_local[col], label=col, alpha=0.8, linewidth=1.5)
-            y_lbl_default = "Multiple Variables"
+            y_lbl_default = "Value"
 
         ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
-        ax.set_aspect('auto')
+        
+        if is_map:
+             ax.set_aspect('equal', adjustable='datalim')
+        else:
+             ax.set_aspect('auto')
 
         
-        ax.set_title(config['title_entry'].get() if config['title_entry'].get() else "Time Series Plot")
-        ax.set_xlabel(config['xlabel_entry'].get() if config['xlabel_entry'].get() else x_lbl_data)
-        ax.set_ylabel(config['ylabel_entry'].get() if config['ylabel_entry'].get() else y_lbl_default)
-    
-    
+        xl_obj = config.get('xlabel_entry')
+        xlabel = xl_obj.get() if hasattr(xl_obj, 'get') else x_lbl_default
+        
+        yl_obj = config.get('ylabel_entry')
+        ylabel = yl_obj.get() if hasattr(yl_obj, 'get') else y_lbl_default
+
+        ax.set_title(title_text)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+    else:
+        ax.text(0.5, 0.5, "No data selected", ha='center', va='center', transform=ax.transAxes)
+
     fig.tight_layout()
     canvas.draw()
+
+
     
 def open_new_plotter_window(df_local, config):
     """
@@ -216,6 +249,94 @@ def open_new_plotter_window(df_local, config):
 
 
 
+
+def plot_snapshot(df_local, last_snapshots, topic_name):
+    """
+    Versión INDEPENDIENTE: Crea su propia ventana y gráfico directamente
+    para evitar conflictos con la lógica de series temporales.
+    """
+    
+    if not topic_name or topic_name not in last_snapshots:
+        return
+
+    msg = last_snapshots[topic_name]
+    title = f"Geometry Plot: {topic_name}"
+    msg_type_str = str(type(msg))
+    
+    
+    xs, ys = [], []
+    is_valid = False
+
+    
+    try:
+        
+        if "PointCloud2" in msg_type_str:
+            if not ROS_ENABLED:
+                messagebox.showerror("Error", "Librería sensor_msgs_py no disponible.")
+                return
+            
+            gen = point_cloud2.read_points(msg, field_names=['x', 'y'], skip_nans=True)
+            data = list(gen)
+            if data:
+                xs, ys = zip(*data)
+                is_valid = True
+
+        
+        else:
+            for field in dir(msg):
+                if field.startswith("_"): continue
+                value = getattr(msg, field)
+                
+                if isinstance(value, (list, tuple)) and len(value) > 0:
+                    if hasattr(value[0], 'x') and hasattr(value[0], 'y'):
+                        xs = [p.x for p in value]
+                        ys = [p.y for p in value]
+                        is_valid = True
+                        break 
+    except Exception as e:
+        messagebox.showerror("Error decodificando", f"Fallo al leer el mensaje:\n{e}")
+        return
+
+    
+    if is_valid and len(xs) > 0:
+        
+        new_window = tk.Toplevel()
+        new_window.title(title)
+        new_window.geometry("800x600")
+
+        
+        fig_geo = plt.figure(figsize=(8, 6))
+        ax_geo = fig_geo.add_subplot(111)
+        
+        canvas_geo = FigureCanvasTkAgg(fig_geo, master=new_window)
+        canvas_geo.get_tk_widget().pack(fill="both", expand=True)
+        
+        
+        toolbar = NavigationToolbar2Tk(canvas_geo, new_window)
+        toolbar.update()
+
+        
+        if "PointCloud" in msg_type_str:
+            ax_geo.scatter(xs, ys, s=2, alpha=0.6, label=topic_name)
+            ax_geo.set_aspect('equal', adjustable='datalim') 
+        else:
+            ax_geo.plot(xs, ys, 'o-', markersize=3, linewidth=1, label=topic_name)
+            ax_geo.set_aspect('auto') 
+
+        
+        ax_geo.set_title(title)
+        ax_geo.set_xlabel("X Coordinate")
+        ax_geo.set_ylabel("Y Coordinate")
+        ax_geo.legend()
+        ax_geo.grid(True)
+        
+        canvas_geo.draw()
+
+    else:
+        messagebox.showinfo("Info", f"No se encontraron datos X/Y válidos en {topic_name}")
+
+
+
 def plot_variables(df, last_snapshots={}):
     """
     Inicializa la aplicación Tkinter y la interfaz de control principal.
@@ -226,7 +347,7 @@ def plot_variables(df, last_snapshots={}):
     global expr_entry
     global name_entry
     global scalar_expr_entry
-    
+    global scrollable_frame
     
     safe_map = {get_safe_name(c): c for c in df.columns}
     check_vars = {}
@@ -343,8 +464,26 @@ def plot_variables(df, last_snapshots={}):
         tk.Checkbutton(row_frame, text=col_name, variable=var, command=update_plot, bg="white", anchor="w").pack(side="left", fill="x", expand=True)
 
         
-        
     
+    snapshot_frame = tk.LabelFrame(scrollable_frame, text="Map & & Trajectory", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
+    
+    snapshot_frame.pack(fill="x", padx=5, pady=2)
+
+    snapshot_options = sorted(last_snapshots.keys())
+    snapshot_var = tk.StringVar(value=snapshot_options[0] if snapshot_options else "")
+
+    
+    if not snapshot_options:
+        snapshot_frame.pack_forget()
+    else:
+        import tkinter.ttk as ttk 
+        snapshot_combobox = ttk.Combobox(snapshot_frame, textvariable=snapshot_var, values=snapshot_options, state="readonly", width=30)
+        snapshot_combobox.pack(fill="x", padx=5, pady=2)
+    
+        
+        tk.Button(snapshot_frame, text="PLOT GEOMETRY", command=lambda: plot_snapshot(df, last_snapshots, snapshot_var.get()), bg="#3498db", fg="white", font=("Arial", 9, "bold")).pack(fill="x", padx=5, pady=5)
+    
+
     math_frame = tk.LabelFrame(scrollable_frame, text="Formula Builder (Time Series)", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
     math_frame.pack(fill="x", pady=5)
     
@@ -696,3 +835,7 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
+
+
+
+    
