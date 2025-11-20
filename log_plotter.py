@@ -68,29 +68,181 @@ def get_safe_name(col_name):
 
 
 
+
+
+
+
+
+global safe_map
+global expr_entry
+global name_entry
+global primary_plot_config
+global AGGREGATE_FUNCTIONS
+global scalar_expr_entry 
+
+formula_counter = 0
+check_vars = {}
+safe_map = {}
+
+AGGREGATE_FUNCTIONS = {
+    "mean": np.mean, "sum": np.sum, "std": np.std, "min": np.min, "max": np.max,
+    "abs_mean": lambda x: np.mean(np.abs(x)),
+}
+
+def get_safe_name(s):
+    """Limpia el nombre de variables para usarlas como claves de diccionario."""
+    return s.replace('.', '_').replace('[', '_').replace(']', '_').replace('/', '_')
+
+def get_eval_context(df_local):
+    """Prepara el contexto de ejecución para las fórmulas."""
+    local_vars = {get_safe_name(real_name): df_local[real_name] for safe_name, real_name in safe_map.items()}
+    math_funcs = {"np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
+                  "sqrt": np.sqrt, "abs": np.abs, "log": np.log, "exp": np.exp}
+    return {"__builtins__": {}, **local_vars, **math_funcs}
+
+def insert_text(text):
+    """Inserta el nombre de la variable en el Entry del Formula Builder activo."""
+    if 'expr_entry' in globals() and expr_entry.focus_get() == expr_entry:
+         target = expr_entry
+    elif 'scalar_expr_entry' in globals() and scalar_expr_entry.focus_get() == scalar_expr_entry:
+         target = scalar_expr_entry
+    else:
+         return
+         
+    idx = target.index(tk.INSERT)
+    target.insert(idx, text)
+    target.focus()
+
+
+
+def calculate_scalar(df_local, scalar_expr_entry_local, scalar_func_var_local, scalar_result_lbl_local):
+    """Calcula un valor escalar (estadística de resumen) a partir de una fórmula."""
+    scalar_expr = scalar_expr_entry_local.get().strip()
+    agg_func_name = scalar_func_var_local.get().strip()
+    
+    if not scalar_expr or agg_func_name == "Select Function":
+        messagebox.showwarning("Advertencia", "Debe introducir una expresión y seleccionar una función.")
+        return
+
+    try:
+        context = get_eval_context(df_local)
+        result_series = eval(scalar_expr, {"__builtins__": {}}, context)
+        
+        if not isinstance(result_series, (np.ndarray, pd.Series, list)):
+            messagebox.showerror("Error", "La expresión no resultó en un vector de datos.")
+            return
+        
+        agg_func = AGGREGATE_FUNCTIONS[agg_func_name]
+        scalar_result = agg_func(result_series)
+        
+        result_text = f"Resultado de {agg_func_name}({scalar_expr}):\n{scalar_result:.6f}"
+        scalar_result_lbl_local.config(text=result_text)
+
+    except NameError as e:
+        messagebox.showerror("Error Matemático", f"Variable o función desconocida:\n{e}")
+    except Exception as e:
+        messagebox.showerror("Error de Cálculo", f"No se pudo calcular el escalar.\nDetalle: {e}")
+
+
+
+def draw_plot(df_local, fig, canvas, config):
+    """
+    Dibuja un único gráfico (1x1) en la figura (fig) usando la configuración (config).
+    """
+    
+    fig.clear()
+    ax = fig.add_subplot(1, 1, 1) 
+
+    
+    x_col = config['x_axis_combobox'].get()
+    if x_col not in df_local.columns:
+        x_data = df_local["timestamp"]; x_lbl_data = "Time (s)"
+    else:
+        x_data = df_local[x_col]; x_lbl_data = x_col
+        
+    
+    variables_to_plot = [col_name for col_name, var_status in check_vars.items() 
+                         if var_status.get() and col_name in df_local.columns]
+
+    if variables_to_plot:
+            
+        y_col_mode = config['y_axis_mode_var'].get()
+        
+        if y_col_mode == "Scatter (X vs. Single Y)" and len(variables_to_plot) == 1:
+            y_col = variables_to_plot[0]
+            ax.plot(x_data, df_local[y_col], label=y_col, alpha=0.8, linewidth=1.5)
+            y_lbl_default = y_col
+        else:
+            for col in variables_to_plot:
+                ax.plot(x_data, df_local[col], label=col, alpha=0.8, linewidth=1.5)
+            y_lbl_default = "Multiple Variables"
+
+        ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
+        ax.set_aspect('auto')
+
+        
+        ax.set_title(config['title_entry'].get() if config['title_entry'].get() else "Time Series Plot")
+        ax.set_xlabel(config['xlabel_entry'].get() if config['xlabel_entry'].get() else x_lbl_data)
+        ax.set_ylabel(config['ylabel_entry'].get() if config['ylabel_entry'].get() else y_lbl_default)
+    
+    
+    fig.tight_layout()
+    canvas.draw()
+    
+def open_new_plotter_window(df_local, config):
+    """
+    Abre una nueva ventana Toplevel con el gráfico actual.
+    """
+    
+    
+    new_window = tk.Toplevel(config['root'])
+    title_text = config['title_entry'].get() if config['title_entry'].get() else f"Gráfico Adicional - {len(config['root'].winfo_children()) - 1}"
+    new_window.title(title_text)
+    new_window.geometry("800x600")
+
+    plot_frame_new = tk.Frame(new_window)
+    plot_frame_new.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    fig_new = plt.figure(figsize=(8, 6))
+    canvas_new = FigureCanvasTkAgg(fig_new, master=plot_frame_new) 
+    canvas_new.draw()
+    
+    toolbar_new = NavigationToolbar2Tk(canvas_new, plot_frame_new)
+    toolbar_new.update()
+    canvas_new.get_tk_widget().pack(fill="both", expand=True)
+
+    
+    draw_plot(df_local, fig_new, canvas_new, config)
+
+
+
 def plot_variables(df, last_snapshots={}):
-    global formula_counter
-    global check_vars
+    """
+    Inicializa la aplicación Tkinter y la interfaz de control principal.
+    """
     global safe_map
+    global check_vars
+    global primary_plot_config 
     global expr_entry
     global name_entry
+    global scalar_expr_entry
     
     
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-
-    check_vars = {}
     safe_map = {get_safe_name(c): c for c in df.columns}
-
+    check_vars = {}
+    
     root = tk.Tk()
-    root.title("Log Plotter - Stable Wide Layout")
+    root.title("Log Plotter - Multi-Window Interface (Simple)")
 
+    
     main_frame = tk.Frame(root)
     main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-    main_frame.grid_columnconfigure(0, weight=0)
-    main_frame.grid_columnconfigure(1, weight=1)
+    
+    main_frame.grid_columnconfigure(0, weight=0); main_frame.grid_columnconfigure(1, weight=1)
     main_frame.grid_rowconfigure(0, weight=1)
+    main_frame.grid_rowconfigure(1, weight=0) 
 
+    
     controls_canvas = tk.Canvas(main_frame)
     scrollbar = tk.Scrollbar(main_frame, orient="vertical", command=controls_canvas.yview)
     scrollable_frame = tk.Frame(controls_canvas)
@@ -98,24 +250,16 @@ def plot_variables(df, last_snapshots={}):
     def adjust_scrollregion(e):
         controls_canvas.configure(scrollregion=controls_canvas.bbox("all"))
         controls_canvas.config(width=scrollable_frame.winfo_reqwidth())
-
     scrollable_frame.bind("<Configure>", adjust_scrollregion)
     controls_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
     controls_canvas.configure(yscrollcommand=scrollbar.set)
-
     controls_canvas.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
     scrollbar.grid(row=0, column=0, sticky="nse")
 
     
-    def _on_mousewheel(event):
-        controls_canvas.yview_scroll(int(-1 * (event.delta/120)), "units")
-        
-    def _on_linux_up(event):
-        controls_canvas.yview_scroll(-1, "units")
-        
-    def _on_linux_down(event):
-        controls_canvas.yview_scroll(1, "units")
-
+    def _on_mousewheel(event): controls_canvas.yview_scroll(int(-1 * (event.delta/120)), "units")
+    def _on_linux_up(event): controls_canvas.yview_scroll(-1, "units")
+    def _on_linux_down(event): controls_canvas.yview_scroll(1, "units")
     root.bind_all("<MouseWheel>", _on_mousewheel)
     root.bind_all("<Button-4>", _on_linux_up)
     root.bind_all("<Button-5>", _on_linux_down)
@@ -123,386 +267,179 @@ def plot_variables(df, last_snapshots={}):
     
     plot_frame = tk.Frame(main_frame)
     plot_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-    
-    plot_frame.grid_rowconfigure(0, weight=1)
-    plot_frame.grid_columnconfigure(0, weight=1)
+    plot_frame.grid_rowconfigure(0, weight=1); plot_frame.grid_columnconfigure(0, weight=1)
 
-    fig, ax = plt.subplots()
-    
-    
+    fig = plt.figure(figsize=(10, 8))
     canvas = FigureCanvasTkAgg(fig, master=plot_frame) 
     canvas.draw()
-    
     toolbar = NavigationToolbar2Tk(canvas, plot_frame)
     toolbar.update()
-    
     canvas.get_tk_widget().pack(fill="both", expand=True)
 
-    def update_plot():
-        ax.clear()
-        
-       
-        x_col = x_axis_combobox.get()
-        y_col = y_axis_combobox.get() 
-        
-        
-        if x_col not in df.columns:
-            x_data = df["timestamp"]; x_lbl_data = "Time (s)"
-        else:
-            x_data = df[x_col]; x_lbl_data = x_col
-            
-        has_plots = False
-        
-        if y_col == "Multiple Variables (Default)":
-            
-            for col, var in check_vars.items():
-                if var.get() and col in df.columns:
-                    ax.plot(x_data, df[col], label=col, alpha=0.8, linewidth=1.5)
-                    has_plots = True
-                    
-        else:
-            
-            if y_col in df.columns:
-                
-                
-                ax.plot(x_data, df[y_col], label=y_col, alpha=0.8, linewidth=1.5)
-                
-                for col, var in check_vars.items():
-                    if var.get():
-                         var.set(False)
-                has_plots = True
-            
-        if has_plots:
-            ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
-            ax.set_aspect('auto')
-            
-            
-            ax.set_xlabel(xlabel_entry.get() if xlabel_entry.get() else x_lbl_data)
-            
-           
-            y_lbl_default = "Multiple Variables" if y_col == "Multiple Variables (Default)" else y_col
-            ax.set_ylabel(ylabel_entry.get() if ylabel_entry.get() else y_lbl_default)
-
-            if title_entry.get(): ax.set_title(title_entry.get())
-            
-        canvas.draw()
-
-    def plot_snapshot():
-        global ROS_ENABLED, point_cloud2
-
-        
-        pass 
-
-    def insert_text(text):
-        
-        if expr_entry.focus_get() == expr_entry:
-             target = expr_entry
-        elif 'scalar_expr_entry' in globals() and scalar_expr_entry.focus_get() == scalar_expr_entry:
-             target = scalar_expr_entry
-        else:
-             return
-             
-        idx = target.index(tk.INSERT)
-        target.insert(idx, text)
-        target.focus()
-
-   
-    AGGREGATE_FUNCTIONS = {
-        "mean": np.mean,
-        "sum": np.sum,
-        "std": np.std,
-        "min": np.min,
-        "max": np.max,
-        "abs_mean": lambda x: np.mean(np.abs(x)),
-        
-    }
     
-    def get_eval_context():
-        """Retorna el contexto de evaluación (variables y funciones matemáticas)."""
-        local_vars = {safe_name: df[real_name] for safe_name, real_name in safe_map.items()}
-        math_funcs = {"np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
-                      "sqrt": np.sqrt, "abs": np.abs, "log": np.log, "exp": np.exp}
-        return {"__builtins__": {}, **local_vars, **math_funcs}
-
+    x_axis_var = tk.StringVar(value="timestamp")
+    y_axis_options = ["Time Series (Multiple Y vs. X)", "Scatter (X vs. Single Y)"]
+    y_axis_mode_var = tk.StringVar(value=y_axis_options[0])
+    
+    
+    def update_plot():
+        draw_plot(df, fig, canvas, primary_plot_config)
+    
     def add_expression(custom_name):
-        """Calcula una nueva variable vectorial y la añade al DataFrame (Formula Builder)."""
         global formula_counter
         global safe_map
-        global name_entry 
-
         expr = expr_entry.get().strip()
-        if not expr:
-            return
-
+        if not expr: return
         try:
-            context = get_eval_context()
+            context = get_eval_context(df)
             result_series = eval(expr, {"__builtins__": {}}, context)
-            
-            if custom_name.strip():
-                display_name = custom_name.strip()
-            else:
-                formula_counter += 1
-                display_name = f"Formula_{formula_counter}({expr})"
-
+            display_name = custom_name.strip() if custom_name.strip() else f"Formula_{formula_counter+1}({expr})"
             df[display_name] = result_series
             safe_map[get_safe_name(display_name)] = display_name
-            
             add_checkbox_to_group("User Formulas", display_name)
-            
-            expr_entry.delete(0, tk.END)
-            name_entry.delete(0, tk.END)
-            
-            
-            all_cols = ["Multiple Variables (Default)"] + sorted(df.columns)
-            y_axis_combobox.config(values=all_cols)
+            expr_entry.delete(0, tk.END); name_entry.delete(0, tk.END)
+            formula_counter += 1
             update_plot()
-
-        except NameError as e:
-            tk.messagebox.showerror("Error Matemático", f"Variable o función desconocida:\n{e}")
         except Exception as e:
-            tk.messagebox.showerror("Error Matemático", f"No se pudo calcular la serie.\nDetalle: {e}")
-
-
-    def calculate_scalar():
-        """Calcula un valor escalar aplicando una función de agregación a una expresión (Scalar Calculator)."""
-        scalar_expr = scalar_expr_entry.get().strip()
-        agg_func_name = scalar_func_var.get().strip()
-        
-        if not scalar_expr or agg_func_name == "Select Function":
-            tk.messagebox.showwarning("Advertencia", "Debe introducir una expresión y seleccionar una función.")
-            return
-
-        try:
+            messagebox.showerror("Error Matemático", f"No se pudo calcular la serie.\nDetalle: {e}")
             
-            context = get_eval_context()
-            result_series = eval(scalar_expr, {"__builtins__": {}}, context)
-            
-            if not isinstance(result_series, (np.ndarray, pd.Series, list)):
-                tk.messagebox.showerror("Error", "La expresión no resultó en un vector de datos.")
-                return
-            
-            
-            agg_func = AGGREGATE_FUNCTIONS[agg_func_name]
-            scalar_result = agg_func(result_series)
-            
-            
-            result_text = f"Resultado de {agg_func_name}({scalar_expr}):\n{scalar_result:.6f}"
-            scalar_result_lbl.config(text=result_text)
-
-        except NameError as e:
-            tk.messagebox.showerror("Error Matemático", f"Variable o función desconocida:\n{e}")
-        except Exception as e:
-            tk.messagebox.showerror("Error de Cálculo", f"No se pudo calcular el escalar.\nDetalle: {e}")
-
     
+    groups = {}
+
     def add_checkbox_to_group(grp_name, col_name):
         nonlocal groups 
-
         
         
-        
-        if grp_name not in groups or not isinstance(groups[grp_name], dict):
-            
+        if grp_name not in groups:
             gf = tk.LabelFrame(scrollable_frame, text=grp_name, bd=1, relief="solid", bg="#Ecf0f1", padx=0, pady=0)
-            
             vf = tk.Frame(gf, bg="white")
             groups[grp_name] = {'frame': vf, 'labelframe': gf}
             
-            btn_frame = tk.Frame(gf, bg="#Ecf0f1")
-            btn_frame.pack(side="top", fill="x", pady=0)
+            
+            btn_frame = tk.Frame(gf, bg="#Ecf0f1"); btn_frame.pack(side="top", fill="x", pady=0)
             symbol_var = tk.StringVar(value="►")
             def toggle_cmd():
-                if vf.winfo_ismapped():
-                    vf.pack_forget()
-                    symbol_var.set("►")
-                else:
-                    vf.pack(fill="x", padx=5, pady=(2, 5))
-                    symbol_var.set("▼")
-            symbol_lbl = tk.Label(btn_frame, textvariable=symbol_var, anchor="w", bg="#Ecf0f1", font=("Arial", 9, "bold"))
-            symbol_lbl.pack(side="left", padx=5, pady=(2, 3))
-            symbol_lbl.bind("<Button-1>", lambda e: toggle_cmd())
+                if vf.winfo_ismapped(): vf.pack_forget(); symbol_var.set("►")
+                else: vf.pack(fill="x", padx=5, pady=(2, 5)); symbol_var.set("▼")
+            tk.Label(btn_frame, textvariable=symbol_var, anchor="w", bg="#Ecf0f1", font=("Arial", 9, "bold")).pack(side="left", padx=5, pady=(2, 3))
             name_lbl = tk.Label(btn_frame, text=grp_name, anchor="w", relief="flat", bg="#Ecf0f1", font=("Arial", 9, "bold"))
             name_lbl.pack(side="left", fill="x", expand=True, pady=3)
-            name_lbl.bind("<Button-1>", lambda e: toggle_cmd())
-            def on_enter(event): btn_frame.config(cursor="hand2")
-            def on_leave(event): btn_frame.config(cursor="")
-            btn_frame.bind("<Enter>", on_enter)
-            btn_frame.bind("<Leave>", on_leave)
-            btn_frame.bind("<Button-1>", lambda e: toggle_cmd())
-            if grp_name == "User Formulas":
-                groups[grp_name]['labelframe'].pack(fill="x", pady=1)
+            
+            for widget in [name_lbl, btn_frame]: widget.bind("<Button-1>", lambda e: toggle_cmd())
+            if grp_name == "User Formulas": groups[grp_name]['labelframe'].pack(fill="x", pady=1)
 
-        
         vf = groups[grp_name]['frame'] 
+        row_frame = tk.Frame(vf, bg="white"); row_frame.pack(fill="x")
         
-        row_frame = tk.Frame(vf, bg="white")
-        row_frame.pack(fill="x")
         
-        var = tk.BooleanVar(value=False)
-        check_vars[col_name] = var
-        
+        var = tk.BooleanVar(value=False); check_vars[col_name] = var
         safe_h = get_safe_name(col_name)
 
         
-        insert_btn = tk.Button(row_frame, text="[+]", font=("Consolas", 8),
-                                bg="#eef8f8", fg="green", bd=0,
-                                command=lambda h=safe_h: insert_text(h))
-        insert_btn.pack(side="left", padx=2)
+        tk.Button(row_frame, text="[+]", font=("Consolas", 8), bg="#eef8f8", fg="green", bd=0,
+                  command=lambda h=safe_h: insert_text(h)).pack(side="left", padx=2)
 
         
-        chk = tk.Checkbutton(row_frame, text=col_name, variable=var, command=update_plot, bg="white", anchor="w")
-        chk.pack(side="left", fill="x", expand=True)
+        tk.Checkbutton(row_frame, text=col_name, variable=var, command=update_plot, bg="white", anchor="w").pack(side="left", fill="x", expand=True)
 
-        check_vars[col_name] = var
         
-    
-    if last_snapshots:
-        snap_frame = tk.LabelFrame(scrollable_frame, text="Map & Trajectory", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
-        snap_frame.pack(fill="x", pady=5)
         
-        global ROS_ENABLED
-        if ROS_ENABLED:
-            snapshot_topics = list(last_snapshots.keys())
-            snapshot_selector = ttk.Combobox(snap_frame, values=snapshot_topics, state="readonly")
-            snapshot_selector.pack(fill="x", pady=5)
-            
-            if snapshot_topics:
-                snapshot_selector.set(snapshot_topics[0])
-                tk.Button(snap_frame, text="PLOT GEOMETRY", bg="#Ecf0f1", command=plot_snapshot).pack(fill="x", pady=5)
-            else:
-                tk.Label(snap_frame, text="Función de Mapa Deshabilitada", fg="#e74c3c").pack(padx=5)
-        else:
-            tk.Label(snap_frame, text="Función de Mapa Deshabilitada", fg="#e74c3c").pack(padx=5)
-
-
     
     math_frame = tk.LabelFrame(scrollable_frame, text="Formula Builder (Time Series)", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
     math_frame.pack(fill="x", pady=5)
-
-    tk.Label(math_frame, text="Creates a new time series variable (vector).", anchor="w").pack(padx=5)
-    tk.Label(math_frame, text="Use [+], operators, and functions like sin().", anchor="w").pack(padx=5)
-
     
-    name_frame = tk.Frame(math_frame)
-    name_frame.pack(fill="x", padx=5, pady=2)
+    name_frame = tk.Frame(math_frame); name_frame.pack(fill="x", padx=5, pady=2)
     tk.Label(name_frame, text="Name:").pack(side="left")
-    name_entry = tk.Entry(name_frame, font=("Consolas", 11), bg="#fdfeff")
-    name_entry.pack(side="left", fill="x", expand=True)
-
-    
-    expr_entry = tk.Entry(math_frame, font=("Consolas", 11), bg="#fdfeff")
-    expr_entry.pack(fill="x", padx=5, pady=5)
-    
-    
+    name_entry = tk.Entry(name_frame, font=("Consolas", 11), bg="#fdfeff"); name_entry.pack(side="left", fill="x", expand=True)
+    expr_entry = tk.Entry(math_frame, font=("Consolas", 11), bg="#fdfeff"); expr_entry.pack(fill="x", padx=5, pady=5)
     tk.Button(math_frame, text="COMPUTE & ADD SERIES", bg="#b3dc7c", font=("Arial", 9, "bold"),
               command=lambda: add_expression(name_entry.get())).pack(fill="x", padx=5, pady=10)
 
     
     scalar_frame = tk.LabelFrame(scrollable_frame, text="Scalar Calculator (Summary Stat)", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
     scalar_frame.pack(fill="x", pady=5)
-    
-    tk.Label(scalar_frame, text="Calculates a single value (scalar) from an expression.", anchor="w").pack(padx=5)
-
-    
     tk.Label(scalar_frame, text="Expression (Vector):", anchor="w").pack(padx=5, pady=(5,0))
-    global scalar_expr_entry
-    scalar_expr_entry = tk.Entry(scalar_frame, font=("Consolas", 11), bg="#fdfeff")
-    scalar_expr_entry.pack(fill="x", padx=5, pady=5)
-    
-    
-    calc_frame = tk.Frame(scalar_frame)
-    calc_frame.pack(fill="x", padx=5, pady=5)
-
+    scalar_expr_entry = tk.Entry(scalar_frame, font=("Consolas", 11), bg="#fdfeff"); scalar_expr_entry.pack(fill="x", padx=5, pady=5)
+    calc_frame = tk.Frame(scalar_frame); calc_frame.pack(fill="x", padx=5, pady=5)
     tk.Label(calc_frame, text="Apply Function:").pack(side="left")
-    
-    
-    global scalar_func_var
     scalar_func_var = tk.StringVar(value="Select Function")
     func_options = ["Select Function"] + sorted(AGGREGATE_FUNCTIONS.keys())
     scalar_func_combobox = ttk.Combobox(calc_frame, textvariable=scalar_func_var, values=func_options, state="readonly", width=12)
     scalar_func_combobox.pack(side="left", padx=5)
-
-    tk.Button(calc_frame, text="CALCULATE", bg="#f9c882", font=("Arial", 9, "bold"),
-              command=calculate_scalar).pack(side="right", fill="x", expand=True)
-
-    
-    global scalar_result_lbl
     scalar_result_lbl = tk.Label(scalar_frame, text="Resultado: N/A", anchor="w", font=("Consolas", 10, "bold"), fg="#2980b9")
+    tk.Button(calc_frame, text="CALCULATE", bg="#f9c882", font=("Arial", 9, "bold"),
+              command=lambda: calculate_scalar(df, scalar_expr_entry, scalar_func_var, scalar_result_lbl)).pack(side="right", fill="x", expand=True)
     scalar_result_lbl.pack(fill="x", padx=5, pady=5)
 
-
     
-    fmt_frame = tk.LabelFrame(scrollable_frame, text="Appearance & Axes", padx=5, pady=5)
-    fmt_frame.pack(fill="x", pady=5)
-    
-    f_grid = tk.Frame(fmt_frame)
-    f_grid.pack(fill="x", padx=5)
-    
-    
-    tk.Label(f_grid, text="Title:").grid(row=0, column=0, sticky="w", pady=2)
-    title_entry = tk.Entry(f_grid, width=30)
-    title_entry.grid(row=0, column=1, sticky="ew", pady=2)
-    
-    
-    tk.Label(f_grid, text="X Label:").grid(row=1, column=0, sticky="w", pady=2)
-    xlabel_entry = tk.Entry(f_grid, width=30)
-    xlabel_entry.grid(row=1, column=1, sticky="ew", pady=2)
-
-    
-    tk.Label(f_grid, text="Y Label:").grid(row=2, column=0, sticky="w", pady=2)
-    ylabel_entry = tk.Entry(f_grid, width=30)
-    ylabel_entry.grid(row=2, column=1, sticky="ew", pady=2)
-    
+    fmt_frame = tk.LabelFrame(scrollable_frame, text="Appearance & Axes", padx=5, pady=5); fmt_frame.pack(fill="x", pady=5)
+    f_grid = tk.Frame(fmt_frame); f_grid.pack(fill="x", padx=5)
     f_grid.grid_columnconfigure(1, weight=1)
+    
+    
+    widgets_to_config = {}
+    row_idx = 1
+    for label, key in [("Title:", 'title_entry'), ("X Label:", 'xlabel_entry'), ("Y Label:", 'ylabel_entry')]:
+        tk.Label(f_grid, text=label).grid(row=row_idx, column=0, sticky="w", pady=2)
+        entry = tk.Entry(f_grid, width=30)
+        entry.grid(row=row_idx, column=1, sticky="ew", pady=2)
+        widgets_to_config[key] = entry
+        row_idx += 1
+
     
     tk.Button(fmt_frame, text="Update Labels", command=update_plot).pack(fill="x", pady=5)
     
-   
-    ts_frame = tk.LabelFrame(scrollable_frame, text="Variables (Time Series)", font=("Arial", 10, "bold"), padx=5, pady=5)
-    ts_frame.pack(fill="x", pady=5)
-
-    xf = tk.Frame(ts_frame)
-    xf.pack(fill="x", padx=5)
+    
+    ts_frame = tk.LabelFrame(scrollable_frame, text="Variables (Time Series)", font=("Arial", 10, "bold"), padx=5, pady=5); ts_frame.pack(fill="x", pady=5)
+    xf = tk.Frame(ts_frame); xf.pack(fill="x", padx=5); xf.grid_columnconfigure(1, weight=1)
 
     all_cols = ["timestamp"] + sorted([col for col in df.columns if col != "timestamp"])
     
     
     tk.Label(xf, text="X-Axis:", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky="w")
-    x_axis_var = tk.StringVar(value="timestamp")
     x_axis_combobox = ttk.Combobox(xf, textvariable=x_axis_var, values=all_cols, state="readonly")
     x_axis_combobox.grid(row=0, column=1, sticky="ew")
     x_axis_combobox.bind("<<ComboboxSelected>>", lambda event: update_plot())
+    widgets_to_config['x_axis_combobox'] = x_axis_combobox
     
-    
-    y_axis_options = ["Multiple Variables (Default)"] + all_cols
-    tk.Label(xf, text="Y-Axis:", font=("Arial", 9, "bold")).grid(row=1, column=0, sticky="w")
-    y_axis_var = tk.StringVar(value="Multiple Variables (Default)")
-    y_axis_combobox = ttk.Combobox(xf, textvariable=y_axis_var, values=y_axis_options, state="readonly")
+   
+    tk.Label(xf, text="Y-Mode:", font=("Arial", 9, "bold")).grid(row=1, column=0, sticky="w")
+    y_axis_combobox = ttk.Combobox(xf, textvariable=y_axis_mode_var, values=y_axis_options, state="readonly")
     y_axis_combobox.grid(row=1, column=1, sticky="ew")
     y_axis_combobox.bind("<<ComboboxSelected>>", lambda event: update_plot())
+    widgets_to_config['y_axis_mode_var'] = y_axis_mode_var 
     
-    xf.grid_columnconfigure(1, weight=1)
+    
+    plot_layout_var = tk.StringVar(value="1x1 (Single Plot)") 
+    widgets_to_config['layout_var'] = plot_layout_var
 
     
-    groups = {}
+    primary_plot_config = {
+        'root': root, 'df': df, 'fig': fig, 'canvas': canvas,
+        **widgets_to_config
+    }
 
+    
     for col_name in sorted(df.columns):
-        if col_name == "timestamp":
-            continue
-
-        if '.' in col_name:
-            grp = col_name.split('.')[0]
-        else:
-            grp = "Misc"
-
+        if col_name == "timestamp": continue
+        grp = col_name.split('.')[0] if '.' in col_name else "Misc"
         add_checkbox_to_group(grp, col_name)
 
-    
     for grp_name in sorted(groups.keys()):
+        if grp_name != "User Formulas": groups[grp_name]['labelframe'].pack(fill="x", pady=1)
         
-        if grp_name != "User Formulas":
-            groups[grp_name]['labelframe'].pack(fill="x", pady=1)
+    
+    duplicate_frame = tk.Frame(main_frame, bg="#f0f0f0")
+    duplicate_frame.grid(row=1, column=1, sticky="se", pady=(5, 0))
 
+    tk.Button(duplicate_frame, 
+              text="Abrir Gráfico en Nueva Ventana", 
+              bg="#2ecc71", fg="white", 
+              font=("Arial", 10, "bold"),
+              command=lambda: open_new_plotter_window(df, primary_plot_config)).pack(padx=5, pady=5)
+
+
+    
     update_plot()
     root.mainloop()
 
