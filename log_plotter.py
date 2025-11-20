@@ -140,25 +140,50 @@ def plot_variables(df, last_snapshots={}):
 
     def update_plot():
         ax.clear()
-        x_col = x_axis_combobox.get()
         
-        if x_col in df.columns:
-            x_data = df[x_col]; x_lbl = x_col
+        
+        x_col = x_axis_combobox.get()
+        y_col = y_axis_combobox.get() 
+        
+        
+        if x_col not in df.columns:
+            x_data = df["timestamp"]; x_lbl_data = "Time (s)"
         else:
-            x_data = df["timestamp"]; x_lbl = "Time (s)"
+            x_data = df[x_col]; x_lbl_data = x_col
             
         has_plots = False
-        for col, var in check_vars.items():
-            if var.get() and col in df.columns:
-                ax.plot(x_data, df[col], label=col, alpha=0.8, linewidth=1.5)
-                has_plots = True
+        
+        if y_col == "Multiple Variables (Default)":
+            
+            
+            for col, var in check_vars.items():
+                if var.get() and col in df.columns:
+                    ax.plot(x_data, df[col], label=col, alpha=0.8, linewidth=1.5)
+                    has_plots = True
+                    
+        else:
+            
+            if y_col in df.columns:
                 
+                ax.plot(x_data, df[y_col], label=y_col, alpha=0.8, linewidth=1.5)
+                
+                for col, var in check_vars.items():
+                    if var.get():
+                         var.set(False)
+                has_plots = True
+            
         if has_plots:
             ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
             ax.set_aspect('auto')
-            ax.set_xlabel(x_lbl)
+            
+            
+            ax.set_xlabel(xlabel_entry.get() if xlabel_entry.get() else x_lbl_data)
+            
+            
+            y_lbl_default = "Multiple Variables" if y_col == "Multiple Variables (Default)" else y_col
+            ax.set_ylabel(ylabel_entry.get() if ylabel_entry.get() else y_lbl_default)
+
             if title_entry.get(): ax.set_title(title_entry.get())
-            if ylabel_entry.get(): ax.set_ylabel(ylabel_entry.get())
             
         canvas.draw()
 
@@ -180,7 +205,7 @@ def plot_variables(df, last_snapshots={}):
         try:
             msg_type_str = str(type(msg))
 
-           
+            
             if "PointCloud2" in msg_type_str and ROS_ENABLED:
                 gen = point_cloud2.read_points(msg, field_names=("x", "y"), skip_nans=True)
                 points = list(gen)
@@ -189,7 +214,7 @@ def plot_variables(df, last_snapshots={}):
                     ax.scatter(x, y, s=1.5, c='black', alpha=0.6, label=f'Map: {topic}')
                     plotted = True
             
-            
+           
             elif hasattr(msg, 'points') and hasattr(msg, 'y') or hasattr(msg, 'poses'):
                 plist = getattr(msg, 'points', []) or getattr(msg, 'poses', [])
                 x, y = [], []
@@ -202,7 +227,7 @@ def plot_variables(df, last_snapshots={}):
                     
                     elif hasattr(p0, 'pose') and hasattr(p0.pose, 'position'):
                         x = [p.pose.position.x for p in plist]; y = [p.pose.position.y for p in plist]
-                   
+                    
                     elif isinstance(p0, (list, tuple)) and len(p0) >= 2:
                          x = [p[0] for p in plist]; y = [p[1] for p in plist]
                 
@@ -256,6 +281,9 @@ def plot_variables(df, last_snapshots={}):
             expr_entry.delete(0, tk.END)
             name_entry.delete(0, tk.END)
             
+            
+            all_cols = ["Multiple Variables (Default)"] + sorted(df.columns)
+            y_axis_combobox.config(values=all_cols)
             update_plot()
 
         except NameError as e:
@@ -272,7 +300,7 @@ def plot_variables(df, last_snapshots={}):
             
             gf = tk.LabelFrame(scrollable_frame, text=grp_name, bd=1, relief="solid", bg="#Ecf0f1", padx=0, pady=0)
             
-            
+           
             vf = tk.Frame(gf, bg="white")
             
             
@@ -340,7 +368,7 @@ def plot_variables(df, last_snapshots={}):
 
         check_vars[col_name] = var
         
-   
+    
     if last_snapshots:
         snap_frame = tk.LabelFrame(scrollable_frame, text="Map & Trajectory", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
         snap_frame.pack(fill="x", pady=5)
@@ -360,21 +388,21 @@ def plot_variables(df, last_snapshots={}):
             tk.Label(snap_frame, text="Función de Mapa Deshabilitada", fg="#e74c3c").pack(padx=5)
 
 
-
+    
     math_frame = tk.LabelFrame(scrollable_frame, text="Formula Builder", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
     math_frame.pack(fill="x", pady=5)
 
     tk.Label(math_frame, text="1. Select variables below using [+].", anchor="w").pack(padx=5)
     tk.Label(math_frame, text="2. Add operators here: *, /, +, -, sin(), cos(), etc.", anchor="w").pack(padx=5)
 
-   
+    
     name_frame = tk.Frame(math_frame)
     name_frame.pack(fill="x", padx=5, pady=2)
     tk.Label(name_frame, text="Name:").pack(side="left")
     name_entry = tk.Entry(name_frame, font=("Consolas", 11), bg="#fdfeff")
     name_entry.pack(side="left", fill="x", expand=True)
 
-   
+    
     expr_entry = tk.Entry(math_frame, font=("Consolas", 11), bg="#fdfeff")
     expr_entry.pack(fill="x", padx=5, pady=5)
     
@@ -384,25 +412,30 @@ def plot_variables(df, last_snapshots={}):
 
 
     
-    fmt_frame = tk.LabelFrame(scrollable_frame, text="Appearance", padx=5, pady=5)
+    fmt_frame = tk.LabelFrame(scrollable_frame, text="Appearance & Axes", padx=5, pady=5)
     fmt_frame.pack(fill="x", pady=5)
     
     f_grid = tk.Frame(fmt_frame)
     f_grid.pack(fill="x", padx=5)
     
-   
-    tk.Label(f_grid, text="Title:").grid(row=0, column=0, sticky="w")
+    
+    tk.Label(f_grid, text="Title:").grid(row=0, column=0, sticky="w", pady=2)
     title_entry = tk.Entry(f_grid, width=30)
-    title_entry.grid(row=0, column=1, sticky="ew")
+    title_entry.grid(row=0, column=1, sticky="ew", pady=2)
     
     
-    tk.Label(f_grid, text="Y Label:").grid(row=1, column=0, sticky="w")
+    tk.Label(f_grid, text="X Label:").grid(row=1, column=0, sticky="w", pady=2)
+    xlabel_entry = tk.Entry(f_grid, width=30)
+    xlabel_entry.grid(row=1, column=1, sticky="ew", pady=2)
+
+    
+    tk.Label(f_grid, text="Y Label:").grid(row=2, column=0, sticky="w", pady=2)
     ylabel_entry = tk.Entry(f_grid, width=30)
-    ylabel_entry.grid(row=1, column=1, sticky="ew")
+    ylabel_entry.grid(row=2, column=1, sticky="ew", pady=2)
     
     f_grid.grid_columnconfigure(1, weight=1)
     
-    tk.Button(fmt_frame, text="Update Labels", command=update_plot).pack(fill="x", pady=2)
+    tk.Button(fmt_frame, text="Update Labels", command=update_plot).pack(fill="x", pady=5)
     
     
     ts_frame = tk.LabelFrame(scrollable_frame, text="Variables (Time Series)", font=("Arial", 10, "bold"), padx=5, pady=5)
@@ -411,15 +444,24 @@ def plot_variables(df, last_snapshots={}):
     xf = tk.Frame(ts_frame)
     xf.pack(fill="x", padx=5)
 
-    tk.Label(xf, text="X-Axis:", font=("Arial", 9, "bold")).pack(side="left")
+    all_cols = ["timestamp"] + sorted([col for col in df.columns if col != "timestamp"])
     
     
+    tk.Label(xf, text="X-Axis:", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky="w")
     x_axis_var = tk.StringVar(value="timestamp")
-    x_axis_options = ["timestamp"] + [col for col in df.columns if col != "timestamp"]
-    x_axis_combobox = ttk.Combobox(xf, textvariable=x_axis_var, values=x_axis_options, state="readonly")
-    x_axis_combobox.pack(side="left", fill="x", expand=True)
-    
+    x_axis_combobox = ttk.Combobox(xf, textvariable=x_axis_var, values=all_cols, state="readonly")
+    x_axis_combobox.grid(row=0, column=1, sticky="ew")
     x_axis_combobox.bind("<<ComboboxSelected>>", lambda event: update_plot())
+    
+    
+    y_axis_options = ["Multiple Variables (Default)"] + all_cols
+    tk.Label(xf, text="Y-Axis:", font=("Arial", 9, "bold")).grid(row=1, column=0, sticky="w")
+    y_axis_var = tk.StringVar(value="Multiple Variables (Default)")
+    y_axis_combobox = ttk.Combobox(xf, textvariable=y_axis_var, values=y_axis_options, state="readonly")
+    y_axis_combobox.grid(row=1, column=1, sticky="ew")
+    y_axis_combobox.bind("<<ComboboxSelected>>", lambda event: update_plot())
+    
+    xf.grid_columnconfigure(1, weight=1)
 
     
     groups = {}
