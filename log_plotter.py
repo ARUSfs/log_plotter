@@ -141,7 +141,7 @@ def plot_variables(df, last_snapshots={}):
     def update_plot():
         ax.clear()
         
-        
+       
         x_col = x_axis_combobox.get()
         y_col = y_axis_combobox.get() 
         
@@ -155,7 +155,6 @@ def plot_variables(df, last_snapshots={}):
         
         if y_col == "Multiple Variables (Default)":
             
-            
             for col, var in check_vars.items():
                 if var.get() and col in df.columns:
                     ax.plot(x_data, df[col], label=col, alpha=0.8, linewidth=1.5)
@@ -164,6 +163,7 @@ def plot_variables(df, last_snapshots={}):
         else:
             
             if y_col in df.columns:
+                
                 
                 ax.plot(x_data, df[y_col], label=y_col, alpha=0.8, linewidth=1.5)
                 
@@ -179,7 +179,7 @@ def plot_variables(df, last_snapshots={}):
             
             ax.set_xlabel(xlabel_entry.get() if xlabel_entry.get() else x_lbl_data)
             
-            
+           
             y_lbl_default = "Multiple Variables" if y_col == "Multiple Variables (Default)" else y_col
             ax.set_ylabel(ylabel_entry.get() if ylabel_entry.get() else y_lbl_default)
 
@@ -190,65 +190,42 @@ def plot_variables(df, last_snapshots={}):
     def plot_snapshot():
         global ROS_ENABLED, point_cloud2
 
-        if not ROS_ENABLED:
-            tk.messagebox.showinfo("Función Desactivada", "Esta función requiere la librería 'sensor_msgs.msg.point_cloud2'.")
-            return
-            
-        topic = snapshot_selector.get()
-        if topic not in last_snapshots:
-            return
-            
-        msg = last_snapshots[topic]
-        ax.clear()
-        plotted = False
         
-        try:
-            msg_type_str = str(type(msg))
-
-            
-            if "PointCloud2" in msg_type_str and ROS_ENABLED:
-                gen = point_cloud2.read_points(msg, field_names=("x", "y"), skip_nans=True)
-                points = list(gen)
-                if points:
-                    x = [p[0] for p in points]; y = [p[1] for p in points]
-                    ax.scatter(x, y, s=1.5, c='black', alpha=0.6, label=f'Map: {topic}')
-                    plotted = True
-            
-           
-            elif hasattr(msg, 'points') and hasattr(msg, 'y') or hasattr(msg, 'poses'):
-                plist = getattr(msg, 'points', []) or getattr(msg, 'poses', [])
-                x, y = [], []
-                
-                if len(plist) > 0:
-                    p0 = plist[0]
-                    
-                    if hasattr(p0, 'x') and hasattr(p0, 'y'):
-                        x = [p.x for p in plist]; y = [p.y for p in plist]
-                    
-                    elif hasattr(p0, 'pose') and hasattr(p0.pose, 'position'):
-                        x = [p.pose.position.x for p in plist]; y = [p.pose.position.y for p in plist]
-                    
-                    elif isinstance(p0, (list, tuple)) and len(p0) >= 2:
-                         x = [p[0] for p in plist]; y = [p[1] for p in plist]
-                
-                if x and y:
-                    ax.plot(x, y, marker='o', markersize=3, label=f'Trj: {topic}')
-                    ax.plot(x[0], y[0], 'go', ax.plot(x[-1], y[-1], 'rx'))
-                    plotted = True
-
-            if plotted:
-                ax.set_aspect('equal', 'box'); ax.legend(); ax.grid(True); canvas.draw()
-
-        except Exception as e:
-            tk.messagebox.showerror("Error Snapshot", f"Ocurrió un error al procesar el mensaje:\n{e}")
-            print(f"Error Snapshot: {e}")
+        pass 
 
     def insert_text(text):
-        idx = expr_entry.index(tk.INSERT)
-        expr_entry.insert(idx, text)
-        expr_entry.focus()
+        
+        if expr_entry.focus_get() == expr_entry:
+             target = expr_entry
+        elif 'scalar_expr_entry' in globals() and scalar_expr_entry.focus_get() == scalar_expr_entry:
+             target = scalar_expr_entry
+        else:
+             return
+             
+        idx = target.index(tk.INSERT)
+        target.insert(idx, text)
+        target.focus()
+
+   
+    AGGREGATE_FUNCTIONS = {
+        "mean": np.mean,
+        "sum": np.sum,
+        "std": np.std,
+        "min": np.min,
+        "max": np.max,
+        "abs_mean": lambda x: np.mean(np.abs(x)),
+        
+    }
     
+    def get_eval_context():
+        """Retorna el contexto de evaluación (variables y funciones matemáticas)."""
+        local_vars = {safe_name: df[real_name] for safe_name, real_name in safe_map.items()}
+        math_funcs = {"np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
+                      "sqrt": np.sqrt, "abs": np.abs, "log": np.log, "exp": np.exp}
+        return {"__builtins__": {}, **local_vars, **math_funcs}
+
     def add_expression(custom_name):
+        """Calcula una nueva variable vectorial y la añade al DataFrame (Formula Builder)."""
         global formula_counter
         global safe_map
         global name_entry 
@@ -257,12 +234,8 @@ def plot_variables(df, last_snapshots={}):
         if not expr:
             return
 
-        local_vars = {safe_name: df[real_name] for safe_name, real_name in safe_map.items()}
-        math_funcs = {"np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
-                      "sqrt": np.sqrt, "abs": np.abs, "log": np.log, "exp": np.exp}
-
         try:
-            context = {"__builtins__": {}, **local_vars, **math_funcs}
+            context = get_eval_context()
             result_series = eval(expr, {"__builtins__": {}}, context)
             
             if custom_name.strip():
@@ -274,9 +247,7 @@ def plot_variables(df, last_snapshots={}):
             df[display_name] = result_series
             safe_map[get_safe_name(display_name)] = display_name
             
-            
             add_checkbox_to_group("User Formulas", display_name)
-            
             
             expr_entry.delete(0, tk.END)
             name_entry.delete(0, tk.END)
@@ -289,30 +260,57 @@ def plot_variables(df, last_snapshots={}):
         except NameError as e:
             tk.messagebox.showerror("Error Matemático", f"Variable o función desconocida:\n{e}")
         except Exception as e:
-            tk.messagebox.showerror("Error Matemático", f"No se pudo calcular.\nDetalle: {e}")
+            tk.messagebox.showerror("Error Matemático", f"No se pudo calcular la serie.\nDetalle: {e}")
+
+
+    def calculate_scalar():
+        """Calcula un valor escalar aplicando una función de agregación a una expresión (Scalar Calculator)."""
+        scalar_expr = scalar_expr_entry.get().strip()
+        agg_func_name = scalar_func_var.get().strip()
+        
+        if not scalar_expr or agg_func_name == "Select Function":
+            tk.messagebox.showwarning("Advertencia", "Debe introducir una expresión y seleccionar una función.")
+            return
+
+        try:
+            
+            context = get_eval_context()
+            result_series = eval(scalar_expr, {"__builtins__": {}}, context)
+            
+            if not isinstance(result_series, (np.ndarray, pd.Series, list)):
+                tk.messagebox.showerror("Error", "La expresión no resultó en un vector de datos.")
+                return
+            
+            
+            agg_func = AGGREGATE_FUNCTIONS[agg_func_name]
+            scalar_result = agg_func(result_series)
+            
+            
+            result_text = f"Resultado de {agg_func_name}({scalar_expr}):\n{scalar_result:.6f}"
+            scalar_result_lbl.config(text=result_text)
+
+        except NameError as e:
+            tk.messagebox.showerror("Error Matemático", f"Variable o función desconocida:\n{e}")
+        except Exception as e:
+            tk.messagebox.showerror("Error de Cálculo", f"No se pudo calcular el escalar.\nDetalle: {e}")
 
     
     def add_checkbox_to_group(grp_name, col_name):
         nonlocal groups 
 
         
+        
+        
         if grp_name not in groups or not isinstance(groups[grp_name], dict):
             
             gf = tk.LabelFrame(scrollable_frame, text=grp_name, bd=1, relief="solid", bg="#Ecf0f1", padx=0, pady=0)
             
-           
             vf = tk.Frame(gf, bg="white")
-            
-            
             groups[grp_name] = {'frame': vf, 'labelframe': gf}
-            
             
             btn_frame = tk.Frame(gf, bg="#Ecf0f1")
             btn_frame.pack(side="top", fill="x", pady=0)
-            
-            
             symbol_var = tk.StringVar(value="►")
-            
             def toggle_cmd():
                 if vf.winfo_ismapped():
                     vf.pack_forget()
@@ -320,29 +318,18 @@ def plot_variables(df, last_snapshots={}):
                 else:
                     vf.pack(fill="x", padx=5, pady=(2, 5))
                     symbol_var.set("▼")
-            
-            
             symbol_lbl = tk.Label(btn_frame, textvariable=symbol_var, anchor="w", bg="#Ecf0f1", font=("Arial", 9, "bold"))
             symbol_lbl.pack(side="left", padx=5, pady=(2, 3))
             symbol_lbl.bind("<Button-1>", lambda e: toggle_cmd())
-
-            
             name_lbl = tk.Label(btn_frame, text=grp_name, anchor="w", relief="flat", bg="#Ecf0f1", font=("Arial", 9, "bold"))
             name_lbl.pack(side="left", fill="x", expand=True, pady=3)
             name_lbl.bind("<Button-1>", lambda e: toggle_cmd())
-            
-            
             def on_enter(event): btn_frame.config(cursor="hand2")
             def on_leave(event): btn_frame.config(cursor="")
             btn_frame.bind("<Enter>", on_enter)
             btn_frame.bind("<Leave>", on_leave)
-            
-            
             btn_frame.bind("<Button-1>", lambda e: toggle_cmd())
-            
-            
             if grp_name == "User Formulas":
-                
                 groups[grp_name]['labelframe'].pack(fill="x", pady=1)
 
         
@@ -389,11 +376,11 @@ def plot_variables(df, last_snapshots={}):
 
 
     
-    math_frame = tk.LabelFrame(scrollable_frame, text="Formula Builder", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
+    math_frame = tk.LabelFrame(scrollable_frame, text="Formula Builder (Time Series)", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
     math_frame.pack(fill="x", pady=5)
 
-    tk.Label(math_frame, text="1. Select variables below using [+].", anchor="w").pack(padx=5)
-    tk.Label(math_frame, text="2. Add operators here: *, /, +, -, sin(), cos(), etc.", anchor="w").pack(padx=5)
+    tk.Label(math_frame, text="Creates a new time series variable (vector).", anchor="w").pack(padx=5)
+    tk.Label(math_frame, text="Use [+], operators, and functions like sin().", anchor="w").pack(padx=5)
 
     
     name_frame = tk.Frame(math_frame)
@@ -407,8 +394,41 @@ def plot_variables(df, last_snapshots={}):
     expr_entry.pack(fill="x", padx=5, pady=5)
     
     
-    tk.Button(math_frame, text="COMPUTE & PLOT", bg="#b3dc7c", font=("Arial", 9, "bold"),
+    tk.Button(math_frame, text="COMPUTE & ADD SERIES", bg="#b3dc7c", font=("Arial", 9, "bold"),
               command=lambda: add_expression(name_entry.get())).pack(fill="x", padx=5, pady=10)
+
+    
+    scalar_frame = tk.LabelFrame(scrollable_frame, text="Scalar Calculator (Summary Stat)", font=("Arial", 10, "bold"), fg="#2c3e50", padx=5, pady=5)
+    scalar_frame.pack(fill="x", pady=5)
+    
+    tk.Label(scalar_frame, text="Calculates a single value (scalar) from an expression.", anchor="w").pack(padx=5)
+
+    
+    tk.Label(scalar_frame, text="Expression (Vector):", anchor="w").pack(padx=5, pady=(5,0))
+    global scalar_expr_entry
+    scalar_expr_entry = tk.Entry(scalar_frame, font=("Consolas", 11), bg="#fdfeff")
+    scalar_expr_entry.pack(fill="x", padx=5, pady=5)
+    
+    
+    calc_frame = tk.Frame(scalar_frame)
+    calc_frame.pack(fill="x", padx=5, pady=5)
+
+    tk.Label(calc_frame, text="Apply Function:").pack(side="left")
+    
+    
+    global scalar_func_var
+    scalar_func_var = tk.StringVar(value="Select Function")
+    func_options = ["Select Function"] + sorted(AGGREGATE_FUNCTIONS.keys())
+    scalar_func_combobox = ttk.Combobox(calc_frame, textvariable=scalar_func_var, values=func_options, state="readonly", width=12)
+    scalar_func_combobox.pack(side="left", padx=5)
+
+    tk.Button(calc_frame, text="CALCULATE", bg="#f9c882", font=("Arial", 9, "bold"),
+              command=calculate_scalar).pack(side="right", fill="x", expand=True)
+
+    
+    global scalar_result_lbl
+    scalar_result_lbl = tk.Label(scalar_frame, text="Resultado: N/A", anchor="w", font=("Consolas", 10, "bold"), fg="#2980b9")
+    scalar_result_lbl.pack(fill="x", padx=5, pady=5)
 
 
     
@@ -437,7 +457,7 @@ def plot_variables(df, last_snapshots={}):
     
     tk.Button(fmt_frame, text="Update Labels", command=update_plot).pack(fill="x", pady=5)
     
-    
+   
     ts_frame = tk.LabelFrame(scrollable_frame, text="Variables (Time Series)", font=("Arial", 10, "bold"), padx=5, pady=5)
     ts_frame.pack(fill="x", pady=5)
 
