@@ -347,7 +347,7 @@ def plot_snapshot(df_local, last_snapshots, topic_name):
         NavigationToolbar2Tk(canvas_geo, new_window)
 
         if "PointCloud" in msg_type_str:
-            ax_geo.scatter(xs, ys, s=2, alpha=0.6)
+            ax_geo.scatter(xs, ys, s=25, alpha=0.6)
             ax_geo.set_aspect('equal', adjustable='datalim')
         else:
             ax_geo.plot(xs, ys, 'o-', markersize=3)
