@@ -142,19 +142,41 @@ def read_can_txt_file(file_path: str):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     conversion_path = os.path.join(script_dir, "can_conversions.csv")
 
+    
+    conversion_map = {}
     try:
         can_conversions = pd.read_csv(conversion_path, dtype={'ID': str})
-        
-        can_conversions['hex_id'] = can_conversions['ID'].apply(lambda x: str(hex(int(str(x).strip(), 16))))
         can_conversions['Signed'] = can_conversions['Signed'].astype(bool)
-        conversion_map = can_conversions.groupby('hex_id').apply(lambda x: x.to_dict('records')).to_dict()
+        
+        for _, row in can_conversions.iterrows():
+            
+            raw_csv_id = str(row['ID']).strip().upper().replace('0X', '')
+            
+            
+            if len(raw_csv_id) == 4:
+                base_id_hex = raw_csv_id[:3] 
+            else:
+                base_id_hex = raw_csv_id
+                
+            
+            try:
+                key_hex = str(hex(int(base_id_hex, 16)))
+                
+                if key_hex not in conversion_map:
+                    conversion_map[key_hex] = []
+                
+                
+                conversion_map[key_hex].append(row.to_dict())
+            except ValueError:
+                continue
+                
     except Exception as e:
-        messagebox.showerror("Error CSV", f"Error procesando IDs del CSV: {e}")
+        messagebox.showerror("Error CSV", f"Error procesando CSV: {e}")
         return pd.DataFrame(), {}
 
     rows = []
     lines_processed = 0
-    print(f"Leyendo TXT (Lógica V1): {file_path}")
+    print(f"Leyendo TXT (Lógica V3.3 con soporte sub-mensajes): {file_path}")
 
     with open(file_path, "r", encoding="latin1") as f:
         for line in f:
@@ -172,10 +194,12 @@ def read_can_txt_file(file_path: str):
                 found_hex_id = None
                 id_index = -1
                 
+                
                 for i in range(1, min(5, len(parts))):
                     try:
                         val = int(parts[i], 16)
-                        candidate_hex = str(hex(val))
+                        candidate_hex = str(hex(val)) 
+                        
                         if candidate_hex in conversion_map:
                             found_hex_id = candidate_hex
                             id_index = i
@@ -185,6 +209,7 @@ def read_can_txt_file(file_path: str):
 
                 if found_hex_id is None: continue
 
+                
                 start_data_idx = id_index + 1
                 if start_data_idx < len(parts) and parts[start_data_idx].startswith('['):
                     start_data_idx += 1
@@ -199,7 +224,9 @@ def read_can_txt_file(file_path: str):
                 
                 if not data_bytes: continue
 
+                
                 relevant_conversions = conversion_map[found_hex_id]
+                
                 for can_info in relevant_conversions:
                     start = can_info["bitIn"]
                     end = can_info["bitFin"] + 1
@@ -385,7 +412,7 @@ def plot_variables(df, last_snapshots={}):
     check_vars = {}
     
     root = tk.Tk()
-    root.title("Grafic.cARUS")
+    root.title("Graphic.cArus")
 
     
     main_frame = tk.Frame(root)
@@ -414,7 +441,7 @@ def plot_variables(df, last_snapshots={}):
     
     def adjust_scrollregion(e):
         controls_canvas.configure(scrollregion=controls_canvas.bbox("all"))
-        controls_canvas.itemconfig(frame_window_id, width=e.width) 
+        controls_canvas.itemconfig(frame_window_id, width=e.width)
 
     scrollable_frame.bind("<Configure>", lambda e: controls_canvas.configure(scrollregion=controls_canvas.bbox("all")))
     frame_window_id = controls_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
@@ -468,7 +495,7 @@ def plot_variables(df, last_snapshots={}):
             lbl_name.pack(side="left", fill="x", expand=True)
             
             for w in [btn_frame, lbl_arrow, lbl_name]: w.bind("<Button-1>", lambda e: toggle())
-            groups[grp_name] = {'content': vf, 'header': gf, 'toggle_func': toggle} 
+            groups[grp_name] = {'content': vf, 'header': gf, 'toggle_func': toggle}
             if grp_name == "User Formulas": toggle()
 
         vf = groups[grp_name]['content']
@@ -481,7 +508,7 @@ def plot_variables(df, last_snapshots={}):
         tk.Checkbutton(row, text=col_name, variable=var, command=update_plot, 
                        bg="white", anchor="w").pack(side="left", fill="x", expand=True)
         
-        return groups[grp_name]['toggle_func'] 
+        return groups[grp_name]['toggle_func']
 
     
     mf = tk.LabelFrame(scrollable_frame, text="Formula Builder", font=("Arial",10,"bold"), bg="#dfe6e9", pady=5)
@@ -495,23 +522,18 @@ def plot_variables(df, last_snapshots={}):
     expr_entry = tk.Entry(mf); expr_entry.pack(fill="x", padx=5)
     
     def add_expr():
-        
         global formula_counter
         try:
             e = expr_entry.get(); n = name_entry.get().strip() or f"Expr_{formula_counter}"
             res = eval(e, {"__builtins__":{}}, get_eval_context(df))
             df[n] = res; safe_map[get_safe_name(n)] = n
-            
-            
             toggle_fn = add_checkbox_to_group("User Formulas", n)
-            
             check_vars[n].set(True)
-            
             formula_counter += 1
             update_plot()
         except Exception as x: messagebox.showerror("Error", str(x))
 
-    tk.Button(mf, text="AÑADIR SERIE", command=add_expr, bg="#b3dc7c").pack(fill="x", padx=5, pady=5)
+    tk.Button(mf, text="AÑADIR VARIABLE", command=add_expr, bg="#b3dc7c").pack(fill="x", padx=5, pady=5)
 
     
     if last_snapshots:
@@ -520,7 +542,7 @@ def plot_variables(df, last_snapshots={}):
         s_opts = sorted(last_snapshots.keys())
         s_var = tk.StringVar(value=s_opts[0])
         ttk.Combobox(sf, textvariable=s_var, values=s_opts, state="readonly").pack(fill="x", padx=5, pady=2)
-        tk.Button(sf, text="VER GEOMETRÍA", command=lambda: plot_snapshot(df, last_snapshots, s_var.get()), 
+        tk.Button(sf, text="PLOTEAR", command=lambda: plot_snapshot(df, last_snapshots, s_var.get()), 
                   bg="#3498db", fg="white", font=("Arial", 9, "bold")).pack(fill="x", padx=5, pady=5)
 
     
@@ -530,8 +552,8 @@ def plot_variables(df, last_snapshots={}):
     fr2 = tk.Frame(scf, bg="#dfe6e9"); fr2.pack(fill="x", padx=5, pady=2)
     s_func = tk.StringVar(value="mean")
     ttk.Combobox(fr2, textvariable=s_func, values=list(AGGREGATE_FUNCTIONS.keys()), state="readonly", width=10).pack(side="left")
-    s_res = tk.Label(scf, text="Res: -", bg="#dfe6e9"); s_res.pack(fill="x")
     tk.Button(fr2, text="CALC", command=lambda: calculate_scalar(df, scalar_expr_entry, s_func, s_res), bg="#f9c882").pack(side="left", padx=5)
+    s_res = tk.Label(scf, text="Res: -", bg="#dfe6e9"); s_res.pack(fill="x")
 
     
     cf = tk.LabelFrame(scrollable_frame, text="Configuración Gráfica", font=("Arial",10,"bold"), bg="#dfe6e9", pady=5)
