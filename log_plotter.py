@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 import re
 import sys
 import os
-
+import array  
 
 ROS_ENABLED = False 
 try:
@@ -114,12 +114,26 @@ def read_rosbag_mcap(file_path: str):
                     col_name = f"{topic}.{field}"
                     row[col_name] = value
                     seen_columns.add(col_name)
-                elif isinstance(value, (list, tuple, np.ndarray)) and len(value) <= 20:
+                
+                
+                elif isinstance(value, (list, tuple, np.ndarray, array.array)) and len(value) <= 20:
                     for i, val in enumerate(value):
                         if isinstance(val, (int, float)):
-                            col_name = f"{topic}.{field}[{i}]"
+                            
+                            
+                            suffix = ""
+                            if "epos" in topic.lower():
+                                if i == 0: suffix = "_State"
+                                elif i == 1: suffix = "_Pos_Rad"
+                                elif i == 2: suffix = "_Target_Rad"
+                                elif i == 3: suffix = "_RPM"      
+                                elif i == 4: suffix = "_Avg_RPM"
+                                elif i == 5: suffix = "_Torque"
+
+                            col_name = f"{topic}.{field}[{i}]{suffix}"
                             row[col_name] = val
                             seen_columns.add(col_name)
+            
             if len(row) > 1:
                 rows.append(row)
         except Exception:
