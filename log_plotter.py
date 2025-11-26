@@ -316,7 +316,7 @@ def draw_plot(df_local, fig, canvas, config):
     fig.clear()
     ax = fig.add_subplot(1, 1, 1)
     variables_to_plot = []
-    
+
     x_col_obj = config.get('x_axis_combobox')
     x_col = x_col_obj.get() if hasattr(x_col_obj, 'get') else str(x_col_obj)
 
@@ -349,7 +349,7 @@ def draw_plot(df_local, fig, canvas, config):
         if variables_to_plot:
             if ("Scatter" in y_col_mode and len(variables_to_plot) == 1) or is_map:
                 for col in variables_to_plot:
-                    pt_size = 2 if is_map else 10
+                    pt_size = 10 if is_map else 15
                     ax.scatter(x_data, df_local[col], s=pt_size, label=col, alpha=0.6)
                 y_lbl_default = "Y Value"
             else:
@@ -380,7 +380,7 @@ def draw_plot(df_local, fig, canvas, config):
             except Exception: pass
             
             if len(xs) > 0:
-                ax.scatter(xs, ys, s=2, label=name, alpha=0.5)
+                ax.scatter(xs, ys, s=10, label=name, alpha=0.5)
 
         ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
         ax.set_aspect('equal' if is_map else 'auto', adjustable='datalim')
