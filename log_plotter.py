@@ -160,12 +160,12 @@ def read_rosbag_mcap(file_path: str):
                             
                             suffix = ""
                             if "epos" in topic.lower():
-                                if i == 0: suffix = "_State"
-                                elif i == 1: suffix = "_Pos_Rad"
-                                elif i == 2: suffix = "_Target_Rad"
-                                elif i == 3: suffix = "_RPM"      
-                                elif i == 4: suffix = "_Avg_RPM"
-                                elif i == 5: suffix = "_Torque"
+                                if i == 0: suffix = "_movement_state"
+                                elif i == 1: suffix = "_position"
+                                elif i == 2: suffix = "_target_position"
+                                elif i == 3: suffix = "_velocity"      
+                                elif i == 4: suffix = "_velocity_avg"
+                                elif i == 5: suffix = "_torque"
 
                             col_name = f"{topic}.{field}[{i}]{suffix}"
                             row[col_name] = val
@@ -315,6 +315,16 @@ def read_can_txt_file(file_path: str):
 def draw_plot(df_local, fig, canvas, config):
     fig.clear()
     ax = fig.add_subplot(1, 1, 1)
+
+    scale_factor = 1.0
+    try:
+        root = config.get('root')
+        if root:
+            screen_width = root.winfo_screenwidth()
+            scale_factor = max(1.0, (screen_width / 1920.0) * 1.2)
+    except Exception:
+        scale_factor = 1.0
+
     variables_to_plot = []
 
     x_col_obj = config.get('x_axis_combobox')
@@ -349,8 +359,9 @@ def draw_plot(df_local, fig, canvas, config):
         if variables_to_plot:
             if ("Scatter" in y_col_mode and len(variables_to_plot) == 1) or is_map:
                 for col in variables_to_plot:
-                    pt_size = 10 if is_map else 15
-                    ax.scatter(x_data, df_local[col], s=pt_size, label=col, alpha=0.6)
+                    base_size = 6 if is_map else 30
+                    final_size = base_size * scale_factor
+                    ax.scatter(x_data, df_local[col], s=final_size, label=col, alpha=0.6)
                 y_lbl_default = "Y Value"
             else:
                 for col in variables_to_plot:
@@ -380,7 +391,7 @@ def draw_plot(df_local, fig, canvas, config):
             except Exception: pass
             
             if len(xs) > 0:
-                ax.scatter(xs, ys, s=10, label=name, alpha=0.5)
+                ax.scatter(xs, ys, s=(6 * scale_factor), label=name, alpha=0.5)
 
         ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
         ax.set_aspect('equal' if is_map else 'auto', adjustable='datalim')
