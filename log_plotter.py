@@ -12,6 +12,7 @@ import re
 import sys
 import os
 import array  
+import struct
 
 ROS_ENABLED = False 
 try:
@@ -25,6 +26,7 @@ except Exception:
 
 formula_counter = 0
 check_vars = {}
+check_geo_vars = {}
 safe_map = {}
 primary_plot_config = {}
 
@@ -60,6 +62,41 @@ def insert_text(text):
         target.focus()
 
 
+def read_pcd_native(file_path):
+    metadata = {}
+    try:
+        with open(file_path, 'rb') as f:
+            header_end = False
+            while not header_end:
+                line = f.readline().decode('ascii').strip()
+                if line.startswith('DATA'):
+                    metadata['DATA'] = line.split()[1]
+                    header_end = True
+                    break
+                parts = line.split()
+                if not parts: continue
+                if parts[0] == 'FIELDS': metadata['FIELDS'] = parts[1:]
+                elif parts[0] == 'SIZE': metadata['SIZE'] = [int(x) for x in parts[1:]]
+                elif parts[0] == 'TYPE': metadata['TYPE'] = parts[1:]
+
+            if 'FIELDS' not in metadata or 'x' not in metadata['FIELDS']: return None
+            
+            idx_x, idx_y = metadata['FIELDS'].index('x'), metadata['FIELDS'].index('y')
+            
+            if metadata['DATA'] == 'ascii':
+                data = np.loadtxt(f)
+                return data[:, [idx_x, idx_y]]
+            elif metadata['DATA'] == 'binary':
+                dtype_list = []
+                for field, size, type_char in zip(metadata['FIELDS'], metadata['SIZE'], metadata['TYPE']):
+                    dt = np.float32 if size == 4 else np.float64 
+                    dtype_list.append((field, dt))
+                buffer = f.read()
+                data = np.frombuffer(buffer, dtype=np.dtype(dtype_list))
+                return np.column_stack((data['x'], data['y']))
+    except Exception as e:
+        print(f"Error PCD: {e}")
+    return None
 
 def read_ros_messages(input_bag: str):
     reader = rosbag2_py.SequentialReader()
@@ -279,7 +316,7 @@ def draw_plot(df_local, fig, canvas, config):
     fig.clear()
     ax = fig.add_subplot(1, 1, 1)
     variables_to_plot = []
-
+    
     x_col_obj = config.get('x_axis_combobox')
     x_col = x_col_obj.get() if hasattr(x_col_obj, 'get') else str(x_col_obj)
 
@@ -295,23 +332,55 @@ def draw_plot(df_local, fig, canvas, config):
     elif 'check_vars' in globals() and check_vars:
         variables_to_plot = [col for col, var in check_vars.items() if var.get() and col in df_local.columns]
 
-    if variables_to_plot:
+    geos_to_plot = []
+    snapshots = config.get('snapshots', {})
+    if 'check_geo_vars' in globals() and check_geo_vars:
+        geos_to_plot = [name for name, var in check_geo_vars.items() if var.get() and name in snapshots]
+
+    if variables_to_plot or geos_to_plot:
         y_mode_obj = config.get('y_axis_mode_var')
         y_col_mode = y_mode_obj.get() if hasattr(y_mode_obj, 'get') else "Multiple Variables"
 
         t_obj = config.get('title_entry')
         title_text = t_obj.get() if hasattr(t_obj, 'get') else str(t_obj)
-        is_map = "PointCloud" in title_text or "Map" in title_text
+        
+        is_map = "PointCloud" in title_text or "Map" in title_text or bool(geos_to_plot)
 
-        if ("Scatter" in y_col_mode and len(variables_to_plot) == 1) or is_map:
-            for col in variables_to_plot:
-                pt_size = 2 if is_map else 10
-                ax.scatter(x_data, df_local[col], s=pt_size, label=col, alpha=0.6)
-            y_lbl_default = "Y Value"
+        if variables_to_plot:
+            if ("Scatter" in y_col_mode and len(variables_to_plot) == 1) or is_map:
+                for col in variables_to_plot:
+                    pt_size = 2 if is_map else 10
+                    ax.scatter(x_data, df_local[col], s=pt_size, label=col, alpha=0.6)
+                y_lbl_default = "Y Value"
+            else:
+                for col in variables_to_plot:
+                    ax.plot(x_data, df_local[col], label=col, alpha=0.8, linewidth=1.5)
+                y_lbl_default = "Value"
         else:
-            for col in variables_to_plot:
-                ax.plot(x_data, df_local[col], label=col, alpha=0.8, linewidth=1.5)
-            y_lbl_default = "Value"
+            y_lbl_default = "Y Value"
+
+        for name in geos_to_plot:
+            msg = snapshots[name]
+            xs, ys = [], []
+            try:
+                if isinstance(msg, np.ndarray):
+                    if msg.shape[1] >= 2: xs, ys = msg[:, 0], msg[:, 1]
+                elif ROS_ENABLED and "PointCloud2" in str(type(msg)):
+                    gen = point_cloud2.read_points(msg, field_names=['x', 'y'], skip_nans=True)
+                    data = list(gen)
+                    if data: xs, ys = zip(*data)
+                else:
+                    for field in dir(msg):
+                        if field.startswith("_"): continue
+                        val = getattr(msg, field)
+                        if isinstance(val, (list, tuple)) and len(val) > 0:
+                            if hasattr(val[0], 'x') and hasattr(val[0], 'y'):
+                                xs = [p.x for p in val]; ys = [p.y for p in val]
+                                break
+            except Exception: pass
+            
+            if len(xs) > 0:
+                ax.scatter(xs, ys, s=2, label=name, alpha=0.5)
 
         ax.legend(loc='upper right', fontsize='small', framealpha=0.9)
         ax.set_aspect('equal' if is_map else 'auto', adjustable='datalim')
@@ -356,7 +425,10 @@ def plot_snapshot(df_local, last_snapshots, topic_name):
     msg_type_str = str(type(msg))
 
     try:
-        if "PointCloud2" in msg_type_str:
+        if isinstance(msg, np.ndarray):
+            xs, ys = msg[:, 0], msg[:, 1]
+            is_valid = True
+        elif "PointCloud2" in msg_type_str:
             if ROS_ENABLED:
                 gen = point_cloud2.read_points(msg, field_names=['x', 'y'], skip_nans=True)
                 data = list(gen)
@@ -589,7 +661,7 @@ def plot_variables(df, last_snapshots={}):
     yc.pack(fill="x", padx=5); yc.bind("<<ComboboxSelected>>", lambda e: update_plot())
     widgets_to_config['y_axis_mode_var'] = y_axis_mode_var
 
-    primary_plot_config = {'root': root, 'df': df, 'fig': fig, 'canvas': canvas, **widgets_to_config}
+    primary_plot_config = {'root': root, 'df': df, 'fig': fig, 'canvas': canvas, 'snapshots': last_snapshots, **widgets_to_config}
 
     
     for col_raw in sorted(df.columns):
@@ -598,9 +670,66 @@ def plot_variables(df, last_snapshots={}):
         grp = col_name.split('.')[0] if '.' in col_name else "Misc"
         add_checkbox_to_group(grp, col_name)
 
-    tk.Button(main_frame, text="Abrir en Ventana Nueva", command=lambda: open_new_plotter_window(df, primary_plot_config), 
-              bg="#2ecc71", fg="white", font=("Arial", 10, "bold")).grid(row=1, column=1, sticky="se", pady=10, padx=10)
+    if last_snapshots:
+        for name in sorted(last_snapshots.keys()):
+            grp_name = "Geometry / Mapas"
+            if grp_name not in groups:
+                pass 
 
+    def add_geo_checkbox(name):
+        grp_name = "Geometry / Mapas"
+        if grp_name not in groups:
+            gf = tk.LabelFrame(scrollable_frame, text="", bd=1, relief="solid", bg="#Ecf0f1")
+            gf.pack(fill="x", pady=1, padx=2)
+            vf = tk.Frame(gf, bg="white")
+            btn_frame = tk.Frame(gf, bg="#Ecf0f1", height=25)
+            btn_frame.pack(fill="x", side="top"); btn_frame.pack_propagate(False)
+            symbol_var = tk.StringVar(value="►")
+            def toggle(v_frame=vf, s_var=symbol_var):
+                if v_frame.winfo_ismapped(): v_frame.pack_forget(); s_var.set("►")
+                else: v_frame.pack(fill="x", padx=5, pady=2); s_var.set("▼")
+            lbl_arrow = tk.Label(btn_frame, textvariable=symbol_var, bg="#Ecf0f1", font=("Arial",10,"bold"), width=3)
+            lbl_arrow.pack(side="left")
+            tk.Label(btn_frame, text=grp_name, bg="#Ecf0f1", font=("Arial",9,"bold"), anchor="w").pack(side="left", fill="x", expand=True)
+            for w in [btn_frame, lbl_arrow]: w.bind("<Button-1>", lambda e: toggle())
+            groups[grp_name] = {'content': vf, 'header': gf, 'toggle_func': toggle}
+            toggle() 
+
+        vf = groups[grp_name]['content']
+        row = tk.Frame(vf, bg="white"); row.pack(fill="x", pady=1)
+        var = tk.BooleanVar(value=False)
+        check_geo_vars[name] = var 
+        
+        tk.Checkbutton(row, text=name, variable=var, command=update_plot, 
+                       bg="white", anchor="w", fg="blue").pack(side="left", fill="x", expand=True)
+
+    
+    for name in sorted(last_snapshots.keys()):
+        add_geo_checkbox(name)
+
+    bottom_btn_frame = tk.Frame(main_frame)
+    bottom_btn_frame.grid(row=1, column=1, sticky="se", pady=10, padx=10)
+
+    def import_pcd_callback():
+        file_path = filedialog.askopenfilename(filetypes=[("PCD Files", "*.pcd")])
+        if not file_path: return
+        points = read_pcd_native(file_path)
+        if points is not None:
+            name = os.path.basename(file_path)
+            last_snapshots[name] = points
+            add_geo_checkbox(name)
+            check_geo_vars[name].set(True)
+            update_plot()
+        else:
+            messagebox.showerror("Error", "No se pudo leer el PCD.")
+
+    tk.Button(bottom_btn_frame, text="Importar PCD", command=import_pcd_callback, 
+              bg="#9b59b6", fg="white", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+
+    tk.Button(bottom_btn_frame, text="Abrir en Ventana Nueva", 
+              command=lambda: open_new_plotter_window(df, primary_plot_config), 
+              bg="#2ecc71", fg="white", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+    
     update_plot()
     root.mainloop()
 
